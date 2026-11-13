@@ -97,7 +97,7 @@ export class Drive {
     if (!this.started) {
       this.started = true; this.sShow = m.s;
       this.markPassed(m.s);
-      this.say(m.s < 60 ? 'Copilote prêt. Départ.' : 'Copilote prêt.');
+      if (!this.sim) this.say('GPS trouvé');
     } else if (jumped) { this.sShow = m.s; this.markPassed(m.s); }
   }
 

@@ -10,7 +10,7 @@ import { LAYERS, OFFLINE_MAX_Z, corridorTiles, downloadTiles, cacheInfo, clearTi
 import { Drive } from './drive.js';
 import { drawAhead, drawProfile, drawArrow } from './hud.js';
 
-const VERSION = '1.0.0';
+const VERSION = '1.0.1';
 const $ = id => document.getElementById(id);
 const L = window.L;
 
@@ -550,7 +550,7 @@ function initNoteUI() {
     syncNoteDlg(false);
   };
   $('nMinus').onclick = () => shift(-10); $('nPlus').onclick = () => shift(10);
-  $('nSay').onclick = () => { Speech.unlock(); Speech.say($('nText').value); };
+  $('nSay').onclick = () => Speech.say($('nText').value, { urgent: true });
   $('nSave').onclick = () => {
     const n = editing.n, r = S.route;
     n.text = $('nText').value.trim() || noteText(n);
@@ -713,7 +713,7 @@ function initSettingsUI() {
   $('setScale').onchange = () => { if (S.prep) { refreshRoute(); toast('Virages recotés'); } };
   $('setSim').oninput = e => { S.cfg.simSpeed = +e.target.value; save(); };
   $('setOffline').onchange = e => { S.cfg.offline = e.target.checked; save(); setBaseLayer(S.cfg.layer); };
-  $('btnVoiceTest').onclick = () => { Speech.unlock(); Speech.say('Cent, gauche quatre long, se referme, et droite deux'); };
+  $('btnVoiceTest').onclick = () => Speech.say('Cent, gauche quatre long, se referme, et droite deux', { urgent: true });
   $('btnClearTiles').onclick = async () => { await clearTiles(); toast('Cartes téléchargées supprimées'); refreshCacheInfo(); };
   window.addEventListener('online', () => setBaseLayer(S.cfg.layer));
   window.addEventListener('offline', () => setBaseLayer(S.cfg.layer));
@@ -751,8 +751,9 @@ function setDriveBase() {
 }
 async function startDrive(simulate) {
   if (!S.prep) return;
-  Speech.unlock();
   Speech.setMuted(false);
+  Speech.stop();
+  Speech.say('Copilote prêt'); // dit pendant l'appui : iOS n'autorise la voix qu'à partir d'un geste
   $('drive').hidden = false; $('dSim').hidden = !simulate;
   $('dMute').classList.remove('on'); $('dMute').innerHTML = '<svg><use href="#i-sound"/></svg>';
   $('dBanner').hidden = true; lastNoteId = null; driveView = 'ahead';
@@ -776,13 +777,23 @@ function stopDrive() {
   renderRoute();
   setTimeout(() => map.invalidateSize(), 50);
 }
-function driveFrame() {
+let tFast = 0, tSlow = 0, lookSm = 200;
+function driveFrame(now) {
   if (!drive) return;
   const st = lastState;
-  if (st) renderDrive(st);
+  if (st && now - tFast >= 60) { // ~16 images/s suffisent et ménagent la batterie
+    tFast = now;
+    const slow = now - tSlow >= 400;
+    if (slow) tSlow = now;
+    renderDrive(st, slow);
+  }
   requestAnimationFrame(driveFrame);
 }
-function renderDrive(st) {
+function renderDrive(st, slow) {
+  renderDriveFast(st);
+  if (slow) renderDriveSlow(st);
+}
+function renderDriveSlow(st) {
   const kmh = Math.round(st.v * 3.6);
   $('dSpeed').textContent = st.started ? kmh : '–';
   $('dRemain').textContent = st.started ? 'Reste ' + fmtDist(st.remaining) : fmtDist(S.prep.total);
@@ -800,6 +811,15 @@ function renderDrive(st) {
   else if (!st.started && st.distToRoute != null && st.distToRoute > 50) msg = `Rejoignez le parcours : il est à ${fmtDist(st.distToRoute)}`;
   ban.hidden = !msg; ban.textContent = msg;
 
+  if (st.slope != null) {
+    const sl = Math.round(st.slope);
+    $('dSlope').textContent = (sl > 0 ? '↗ ' : sl < 0 ? '↘ ' : '→ ') + Math.abs(sl) + ' %';
+    $('dEle').textContent = 'alt. ' + Math.round(st.ele) + ' m';
+  } else { $('dSlope').textContent = '–'; $('dEle').textContent = ''; }
+
+  drawProfile($('dProfile'), S.prep, drive.notes, Math.max(0, st.s - 100), Math.min(S.prep.total, Math.max(st.s, 0) + 1000), st.s);
+}
+function renderDriveFast(st) {
   const n = st.next;
   if (n) {
     const d = n.s - st.s;
@@ -812,15 +832,10 @@ function renderDrive(st) {
     $('dText').classList.remove('long');
     if (lastNoteId !== 'none') { lastNoteId = 'none'; drawArrow($('dArrow'), null); }
   }
-  if (st.slope != null) {
-    const sl = Math.round(st.slope);
-    $('dSlope').textContent = (sl > 0 ? '↗ ' : sl < 0 ? '↘ ' : '→ ') + Math.abs(sl) + ' %';
-    $('dEle').textContent = 'alt. ' + Math.round(st.ele) + ' m';
-  } else { $('dSlope').textContent = '–'; $('dEle').textContent = ''; }
-
   if (driveView === 'ahead') {
-    const look = Math.max(160, Math.min(420, st.v * 11));
-    drawAhead($('dAhead'), S.prep, drive.notes, st.s, look);
+    const target = Math.max(160, Math.min(420, st.v * 11));
+    lookSm += (target - lookSm) * 0.06; // l'échelle suit la vitesse en douceur
+    drawAhead($('dAhead'), S.prep, drive.notes, st.s, lookSm);
   } else if (driveMap && st.started) {
     driveCar.setLatLng([st.lat, st.lon]);
     const el = driveCar.getElement(); if (el) el.firstChild.style.transform = `rotate(${st.heading}deg)`;
@@ -829,7 +844,6 @@ function renderDrive(st) {
       driveMap.setView([st.lat, st.lon], driveMap.getZoom(), { animate: true, duration: 0.8, easeLinearity: 1 });
     }
   }
-  drawProfile($('dProfile'), S.prep, drive.notes, Math.max(0, st.s - 100), Math.min(S.prep.total, Math.max(st.s, 0) + 1000), st.s);
 }
 function toggleDriveView() {
   driveView = driveView === 'ahead' ? 'map' : 'ahead';
@@ -869,7 +883,7 @@ function initDriveUI() {
 let reco = null;
 function startReco() {
   if (!navigator.geolocation) return toast('GPS non disponible sur cet appareil');
-  Speech.unlock();
+  Speech.say('Reconnaissance lancée');
   showTab('map');
   reco = { pts: [], marks: [], dist: 0, acc: null, line: L.polyline([], { color: '#e03131', weight: 5, pane: 'routePane' }).addTo(map) };
   $('reco').hidden = false; $('recoStats').textContent = 'en attente du GPS…';

@@ -1,5 +1,5 @@
 // Service worker : l'app fonctionne hors ligne, les images de carte sont gardées en cache.
-const VERSION = 'rg-1.0.0';
+const VERSION = 'rg-1.0.1';
 const TILES = 'rg-tiles-v1';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
