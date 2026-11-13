@@ -1,0 +1,88 @@
+#
+# Profil "Rallye chemins" : voiture sur routes ET chemins/pistes (highway=track).
+# Les restrictions d'acces sur les chemins sont seulement penalisees :
+# l'utilisateur est cense avoir l'autorisation de rouler sur son parcours.
+#
+
+---context:global
+
+assign downhillcost 0
+assign downhillcutoff 0
+assign uphillcost 0
+assign uphillcutoff 0
+
+assign validForCars 1
+
+assign turnInstructionMode = 0
+
+---context:way
+
+assign turncost = if junction=roundabout then 0 else 40
+
+assign initialclassifier = if route=ferry then 1 else 0
+
+assign initialcost switch route=ferry 20000 0
+
+
+assign isresidentialorliving = or highway=residential|living_street living_street=yes
+
+assign explicitno
+       switch motorcar=
+              switch motor_vehicle=
+                     switch vehicle=
+                            switch access=
+                                   0
+                                   access=no|private
+                            vehicle=no|private
+                     motor_vehicle=no|private
+              motorcar=no|private
+
+assign accesspenalty
+       switch explicitno
+              switch highway=track 1.5 6
+              0
+
+assign onewaypenalty
+       switch switch reversedirection=yes
+                     switch oneway=
+                            junction=roundabout
+                            or oneway=yes or oneway=true oneway=1
+                     oneway=-1
+              10000
+              0.0
+
+assign ispaved or surface=paved or surface=asphalt or surface=concrete surface=paving_stones
+
+assign costfactor
+
+ add max onewaypenalty accesspenalty
+
+ switch and highway= not route=ferry  10000
+
+ switch highway=motorway|motorway_link               10
+ switch highway=trunk|trunk_link                     3
+ switch highway=primary|primary_link                 1.6
+ switch highway=secondary|secondary_link             1.3
+ switch highway=tertiary|tertiary_link               1.15
+ switch highway=unclassified                         1.0
+ switch route=ferry                                  5.67
+ switch isresidentialorliving                        1.4
+ switch highway=service                              1.4
+ switch highway=track|road
+  switch tracktype=grade1 1.0
+  switch tracktype=grade2 1.05
+  switch tracktype=grade3 1.1
+  switch tracktype=grade4 1.3
+  switch tracktype=grade5 1.6
+  1.1
+ switch highway=bridleway                            4
+ switch highway=path                                 5
+ switch highway=cycleway                             8
+ 10000
+
+---context:node
+
+assign initialcost
+       switch barrier=bollard|block|cycle_barrier|jersey_barrier 5000
+       switch barrier=gate|lift_gate|chain 300
+       0
