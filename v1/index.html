@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="fr" data-theme="day">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Rallye GPS v1</title>
+<meta name="description" content="GPS copilote de rallye : notes de virages dites à voix haute, pente à venir, cartes des chemins.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Rallye v1">
+<meta name="theme-color" content="#f3efe6">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="icon" type="image/png" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4 3 6.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5L9 4zm0 0v13.5m6-11v13.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-notes" viewBox="0 0 24 24"><path d="M5 5h14M5 10h14M5 15h9M5 20h6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-routes" viewBox="0 0 24 24"><path d="M6 19c0-6 12-4 12-10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-dasharray="1 4"/><circle cx="6" cy="19" r="2.4" fill="currentColor"/><circle cx="18" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><path d="M4 7h10m4 0h2M4 17h2m4 0h10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="7" r="2.3" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="8" cy="17" r="2.3" fill="none" stroke="currentColor" stroke-width="2"/></symbol>
+    <symbol id="i-locate" viewBox="0 0 24 24"><circle cx="12" cy="12" r="6" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5zm-9 9 9 5 9-5M3 16l9 5 9-5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M19 5l-2 2M7 17l-2 2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 3.5v17a8.5 8.5 0 0 0 0-17z" fill="currentColor"/></symbol>
+    <symbol id="i-undo" viewBox="0 0 24 24"><path d="M8 5 4 9l4 4M4 9h10a6 6 0 0 1 0 12h-3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-pen" viewBox="0 0 24 24"><path d="m4 20 1-4L16 5l3 3L8 19l-4 1zM14 7l3 3" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.5v15l12-7.5-12-7.5z" fill="currentColor"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+    <symbol id="i-sound" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="m17 9 5 6m0-6-5 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></symbol>
+  </defs>
+</svg>
+
+<div id="app">
+  <div id="map"></div>
+
+  <div id="top" class="on-map">
+    <div class="search">
+      <input id="q" type="search" placeholder="Chercher une commune, un lieu-dit…" autocomplete="off" enterkeyhint="search">
+      <ul id="qres" hidden></ul>
+    </div>
+    <button id="btnTheme" class="fab" aria-label="Mode jour ou nuit"><svg><use href="#i-auto"/></svg></button>
+  </div>
+
+  <div id="side" class="on-map">
+    <button id="btnLocate" class="fab" aria-label="Ma position"><svg><use href="#i-locate"/></svg></button>
+    <button id="btnLayers" class="fab" aria-label="Fond de carte"><svg><use href="#i-layers"/></svg></button>
+    <div id="layerMenu" class="menu" hidden></div>
+  </div>
+
+  <div id="sheet" class="on-map">
+    <div id="hint" hidden></div>
+    <div class="sheet-head">
+      <div class="sheet-title"><b id="rName">Nouveau parcours</b><span id="rStats">Touchez « Tracer » puis la carte pour poser vos points.</span></div>
+      <span id="busy" hidden></span>
+    </div>
+    <div class="sheet-actions">
+      <button id="btnTrace" class="btn"><svg><use href="#i-pen"/></svg><span>Tracer</span></button>
+      <button id="btnUndo" class="btn icon" aria-label="Annuler le dernier point"><svg><use href="#i-undo"/></svg></button>
+      <button id="btnMode" class="btn" aria-label="Type de tracé"><span id="modeLbl">Chemins</span></button>
+      <button id="btnGo" class="btn primary"><svg><use href="#i-play"/></svg><span>Démarrer</span></button>
+    </div>
+  </div>
+
+  <section id="p-notes" class="panel" hidden>
+    <header><h2>Notes</h2><span id="nCount" class="muted"></span></header>
+    <div class="panel-body">
+      <canvas id="fullProfile" class="profile-card"></canvas>
+      <div id="eleInfo" class="muted small"></div>
+      <p class="muted small" id="notesHelp">Touchez une note pour la modifier. Pour en ajouter une, touchez le tracé sur la carte puis « Ajouter une note ici ».</p>
+      <ul id="noteList" class="list"></ul>
+    </div>
+  </section>
+
+  <section id="p-routes" class="panel" hidden>
+    <header><h2>Parcours</h2></header>
+    <div class="panel-body">
+      <div class="card">
+        <label class="field"><span>Nom du parcours en cours</span><input id="inName" type="text" maxlength="60"></label>
+        <div id="curStats" class="muted small"></div>
+        <div class="grid2">
+          <button id="btnExport" class="btn">Exporter en GPX</button>
+          <button id="btnReverse" class="btn">Inverser le sens</button>
+          <button id="btnOffline" class="btn wide">Télécharger la carte du parcours (hors ligne)</button>
+        </div>
+        <div id="offProg" class="muted small" hidden></div>
+      </div>
+      <div class="grid2">
+        <button id="btnNew" class="btn">Nouveau parcours</button>
+        <button id="btnImport" class="btn">Importer un GPX</button>
+        <button id="btnReco" class="btn wide accent">Mode reconnaissance : enregistrer ma trace GPS</button>
+      </div>
+      <input id="file" type="file" hidden>
+      <h3>Parcours enregistrés</h3>
+      <ul id="routeList" class="list"></ul>
+    </div>
+  </section>
+
+  <section id="p-settings" class="panel" hidden>
+    <header><h2>Réglages</h2></header>
+    <div class="panel-body">
+      <div class="card">
+        <h3>Affichage</h3>
+        <div class="seg" id="setTheme"><button data-v="auto">Auto (soleil)</button><button data-v="day">Jour</button><button data-v="night">Nuit</button></div>
+        <div id="sunInfo" class="muted small"></div>
+      </div>
+      <div class="card">
+        <h3>Voix du copilote</h3>
+        <label class="field"><span>Voix</span><select id="setVoice"></select></label>
+        <label class="field"><span>Débit <b id="rateVal"></b></span><input id="setRate" type="range" min="0.7" max="1.6" step="0.05"></label>
+        <label class="field"><span>Annoncer <b id="leadVal"></b> avant le virage</span><input id="setLead" type="range" min="3" max="10" step="0.5"></label>
+        <label class="check"><input id="setDist" type="checkbox"><span>Dire la distance avant la note (« 100, gauche 4 »)</span></label>
+        <label class="check"><input id="setRelief" type="checkbox"><span>Annoncer crêtes, cuvettes et fortes pentes</span></label>
+        <button id="btnVoiceTest" class="btn">Tester la voix</button>
+      </div>
+      <div class="card">
+        <h3>Cotation des virages</h3>
+        <label class="field"><span>Sévérité <b id="scaleVal"></b></span><input id="setScale" type="range" min="0.7" max="1.4" step="0.05"></label>
+        <p class="muted small">1 = très serré, 6 = rapide. Vers la droite, les virages sont cotés plus serrés (plus prudent). Les notes que vous avez modifiées ne changent pas.</p>
+      </div>
+      <div class="card">
+        <h3>Simulation</h3>
+        <label class="field"><span>Vitesse maxi simulée <b id="simVal"></b></span><input id="setSim" type="range" min="30" max="140" step="5"></label>
+      </div>
+      <div class="card">
+        <h3>Cartes hors ligne</h3>
+        <label class="check"><input id="setOffline" type="checkbox"><span>Mode hors ligne : n'utiliser que les cartes déjà téléchargées (zoom limité)</span></label>
+        <div id="cacheInfo" class="muted small"></div>
+        <button id="btnClearTiles" class="btn">Vider les cartes téléchargées</button>
+      </div>
+      <div class="card">
+        <h3>Installer sur l'iPhone</h3>
+        <p class="small">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». Lancez ensuite l'app depuis son icône. Pendant la conduite, l'app doit rester à l'écran, téléphone déverrouillé.</p>
+        <p class="muted small">Données : © IGN (Plan IGN, photos aériennes, RGE ALTI), © contributeurs OpenStreetMap, itinéraires BRouter. À utiliser en reconnaissance, sur épreuve fermée ou terrain autorisé. Sur route ouverte, le code de la route s'applique.</p>
+        <p class="muted small" id="ver"></p>
+      </div>
+    </div>
+  </section>
+
+  <nav id="tabs">
+    <button data-tab="map" class="on"><svg><use href="#i-map"/></svg><span>Carte</span></button>
+    <button data-tab="notes"><svg><use href="#i-notes"/></svg><span>Notes</span></button>
+    <button data-tab="routes"><svg><use href="#i-routes"/></svg><span>Parcours</span></button>
+    <button data-tab="settings"><svg><use href="#i-gear"/></svg><span>Réglages</span></button>
+  </nav>
+
+  <!-- Mode reconnaissance -->
+  <div id="reco" hidden>
+    <div class="reco-top"><span class="rec-dot"></span><b>Reco</b><span id="recoStats">en attente du GPS…</span></div>
+    <div class="reco-bottom">
+      <div class="chips" id="recoMarks">
+        <button data-t="attention">Attention</button><button data-t="bosse">Bosse</button><button data-t="frein">Frein</button>
+        <button data-t="sale">Sale</button><button data-t="étroit">Étroit</button><button data-t="ne pas couper">Pas couper</button>
+      </div>
+      <div class="grid2"><button id="recoCancel" class="btn">Abandonner</button><button id="recoStop" class="btn primary">Terminer et analyser</button></div>
+    </div>
+  </div>
+
+  <!-- Mode conduite -->
+  <div id="drive" hidden>
+    <div class="d-top">
+      <div class="d-speed"><b id="dSpeed">0</b><small>km/h</small></div>
+      <div class="d-info"><span id="dRemain">–</span><span id="dGps">GPS…</span></div>
+      <button id="dMute" class="dbtn" aria-label="Couper la voix"><svg><use href="#i-sound"/></svg></button>
+      <button id="dView" class="dbtn" aria-label="Carte ou virages"><svg><use href="#i-map"/></svg></button>
+      <button id="dMark" class="dbtn" aria-label="Marquer une note ici"><svg><use href="#i-plus"/></svg></button>
+      <button id="dQuit" class="dbtn" aria-label="Quitter"><svg><use href="#i-x"/></svg></button>
+    </div>
+    <div class="d-note">
+      <canvas id="dArrow"></canvas>
+      <div class="d-note-txt">
+        <div id="dDist">–</div>
+        <div id="dText">Prêt</div>
+        <div id="dNext2"></div>
+      </div>
+    </div>
+    <div class="d-main">
+      <canvas id="dAhead"></canvas>
+      <div id="dMap" hidden></div>
+      <div id="dBanner" hidden></div>
+    </div>
+    <div class="d-prof">
+      <div class="d-slope"><b id="dSlope">–</b><small id="dEle"></small></div>
+      <canvas id="dProfile"></canvas>
+    </div>
+    <div class="d-sim" id="dSim" hidden>
+      <span>Simulation</span>
+      <button id="simPause" class="btn small">Pause</button>
+      <button id="simBack" class="btn small">−300 m</button>
+      <button id="simFwd" class="btn small">+500 m</button>
+    </div>
+  </div>
+
+  <dialog id="dlgGo">
+    <h3>Démarrer le copilote</h3>
+    <p class="muted small" id="goInfo"></p>
+    <button id="goDrive" class="btn primary block">Conduire avec le GPS</button>
+    <button id="goSim" class="btn block">Simuler le parcours (test à la maison)</button>
+    <button class="btn block ghost" data-close>Annuler</button>
+  </dialog>
+
+  <dialog id="dlgNote">
+    <h3><span id="nTitle">Note</span> <span id="nPos" class="muted"></span></h3>
+    <div class="seg" id="nKind"><button data-v="turn">Virage</button><button data-v="relief">Relief</button><button data-v="custom">Libre</button></div>
+    <div id="nTurn">
+      <div class="seg" id="nDir"><button data-v="G">Gauche</button><button data-v="D">Droite</button></div>
+      <div class="seg tight" id="nGrade"><button data-v="H">Ép.</button><button data-v="Q">Éq.</button><button data-v="1">1</button><button data-v="2">2</button><button data-v="3">3</button><button data-v="4">4</button><button data-v="5">5</button><button data-v="6">6</button></div>
+      <div class="chips" id="nMods"><button data-t="long">long</button><button data-t="se referme">se referme</button><button data-t="s'ouvre">s'ouvre</button><button data-t="ne pas couper">ne pas couper</button><button data-t="sale">sale</button><button data-t="frein">frein</button><button data-t="à fond">à fond</button></div>
+    </div>
+    <div id="nRelief" hidden>
+      <div class="chips" id="nRel"><button data-k="crest">sur crête</button><button data-k="crest" data-s="1">bosse</button><button data-k="dip">cuvette</button><button data-k="steep_down">descente forte</button><button data-k="steep_up">montée forte</button></div>
+    </div>
+    <div id="nCustom" hidden>
+      <div class="chips" id="nQuick"><button>attention</button><button>danger</button><button>frein</button><button>sale</button><button>gravier</button><button>étroit</button><button>pont</button><button>saut</button><button>ne pas couper</button><button>à fond</button></div>
+    </div>
+    <label class="field"><span>Texte lu par le copilote</span><input id="nText" type="text" maxlength="80" autocomplete="off"></label>
+    <div class="row">
+      <button id="nMinus" class="btn small">← 10 m</button>
+      <span class="muted small grow center">Position de la note</span>
+      <button id="nPlus" class="btn small">10 m →</button>
+    </div>
+    <div class="grid2">
+      <button id="nSay" class="btn small">Écouter</button>
+      <button id="nDel" class="btn small danger">Supprimer</button>
+      <button class="btn small" data-close>Annuler</button>
+      <button id="nSave" class="btn small primary">OK</button>
+    </div>
+  </dialog>
+
+  <div id="toast" hidden></div>
+</div>
+<script src="vendor/leaflet.js"></script>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
