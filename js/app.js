@@ -1,6 +1,6 @@
 // Rallye GPS : application principale (carte, tracé, notes, parcours, réglages, conduite, reco).
 import { haversine, fmtDist } from './geo.js';
-import { prepareRoute, elevationPoints, attachElevation, trackEleGrid, buildNotes, noteText, noteColor, noteBadge, newId, nearestIndex } from './analysis.js';
+import { prepareRoute, elevationPoints, attachElevation, trackEleGrid, buildNotes, noteText, noteColor, noteBadge, newId, nearestIndex, shiftGrade } from './analysis.js';
 import { routeSegment, fetchElevations, searchPlace } from './services.js';
 import { toGPX, parseGPX } from './gpx.js';
 import { Store, loadSettings, saveSettings } from './storage.js';
@@ -10,7 +10,7 @@ import { LAYERS, OFFLINE_MAX_Z, corridorTiles, downloadTiles, cacheInfo, clearTi
 import { Drive } from './drive.js';
 import { drawAhead, drawProfile, drawArrow } from './hud.js';
 
-const VERSION = '1.0.1';
+const VERSION = '1.1.0';
 const $ = id => document.getElementById(id);
 const L = window.L;
 
@@ -54,11 +54,11 @@ function initMap() {
   map.on('click', e => { closeMenus(); if (S.tracing) addWaypoint(e.latlng.lat, e.latlng.lng); });
 }
 
-function makeTileLayer(key) {
+function makeTileLayer(key, maxZoom = 19) {
   const d = LAYERS[key];
   const off = S.cfg.offline || navigator.onLine === false;
   return L.tileLayer(d.url, {
-    maxZoom: 19, maxNativeZoom: off ? OFFLINE_MAX_Z : d.maxNative, attribution: d.attr,
+    maxZoom, maxNativeZoom: off ? OFFLINE_MAX_Z : d.maxNative, attribution: d.attr,
     crossOrigin: 'anonymous', keepBuffer: 3, updateWhenIdle: false,
   });
 }
@@ -197,7 +197,7 @@ function refreshRoute({ keepView = true } = {}) {
       r.ele = null; r.eleKey = null; r.eleSrc = g ? 'approx' : null;
       clearTimeout(eleTimer); eleTimer = setTimeout(loadElevation, 1500);
     }
-    r.notes = buildNotes(S.prep, r.notes, { scale: S.cfg.scale, vertical: r.eleSrc === 'ign' });
+    r.notes = buildNotes(S.prep, r.notes, { sev: S.cfg.sev, vertical: r.eleSrc === 'ign' });
   } else if (r.source === 'plan') r.notes = r.notes.filter(n => !n.auto || n.edited);
   renderRoute();
   if (!keepView && S.prep) fitRoute();
@@ -215,7 +215,7 @@ async function loadElevation() {
     if (!vals) { $('eleInfo').textContent = 'Altitude IGN indisponible ici (hors de France ?) : profil approximatif.'; return; }
     r.ele = vals.map(v => Math.round(v * 100) / 100); r.eleKey = prep.key; r.eleSrc = 'ign';
     attachElevation(prep, r.ele);
-    r.notes = buildNotes(prep, r.notes, { scale: S.cfg.scale, vertical: true });
+    r.notes = buildNotes(prep, r.notes, { sev: S.cfg.sev, vertical: true });
     renderRoute(); saveRoute();
   } catch { /* hors ligne : on garde le profil approximatif */ }
   finally { busy(-1); }
@@ -254,14 +254,25 @@ function renderRoute() {
     m.addTo(wpLayer);
   });
   noteLayer.clearLayers();
+  const nums = noteNumbers();
   for (const n of r.notes) {
     if (n.off) continue;
-    const m = L.marker([n.lat, n.lon], { icon: L.divIcon({ className: '', html: `<div class="nm" style="background:${noteColor(n)}">${esc(noteBadge(n))}</div>`, iconSize: [30, 22], iconAnchor: [15, 11] }) });
+    const m = noteMarker(n, nums.get(n.id));
     m.on('click', () => openNote(n));
     m.addTo(noteLayer);
   }
   syncNoteLayer();
   renderSummary(); renderNotes(); redrawStatic();
+}
+// Numéro de chaque note active, dans l'ordre du parcours (1, 2, 3...).
+function noteNumbers() {
+  const m = new Map(); let k = 0;
+  for (const n of S.route.notes) if (!n.off) m.set(n.id, ++k);
+  return m;
+}
+function noteMarker(n, num) {
+  const html = `<div class="nm" style="background:${noteColor(n)}">${S.cfg.showNum && num ? `<i>${num}</i>` : ''}${esc(noteBadge(n))}</div>`;
+  return L.marker([n.lat, n.lon], { icon: L.divIcon({ className: '', html, iconSize: [0, 0] }) });
 }
 function syncNoteLayer() {
   const show = map.getZoom() >= 15;
@@ -469,22 +480,33 @@ function renderNotes() {
   const r = S.route, ul = $('noteList');
   const act = r.notes.filter(n => !n.off).length;
   $('nCount').textContent = r.notes.length ? `${act} active${act > 1 ? 's' : ''}` : '';
+  const total = S.prep ? S.prep.total : 0;
+  const nums = noteNumbers();
+  const addRow = (label, at) => `<li class="link"><span>${label}</span>` +
+    (S.prep ? `<button class="add" data-add="${Math.round(at)}" aria-label="Ajouter une note ici">＋</button>` : '') + '</li>';
   if (!r.notes.length) {
-    ul.innerHTML = '<li class="muted">Aucune note pour l\'instant. Tracez un parcours : les virages sont détectés et notés automatiquement.</li>';
+    ul.innerHTML = '<li class="muted">Aucune note pour l\'instant. Tracez un parcours : les virages sont détectés et notés automatiquement.</li>' +
+      (S.prep ? addRow('Ajouter une note au milieu du parcours', total / 2) : '');
   } else {
-    let html = '', prevEnd = null;
+    let html = '', prevEnd = 0, first = true;
     for (const n of r.notes) {
-      if (prevEnd != null && !n.off) {
-        const gap = n.s - prevEnd;
-        html += `<li class="link">${gap < 15 ? 'enchaîne' : Math.round(gap / 10) * 10 + ' m'}</li>`;
+      if (!n.off) {
+        const gap = Math.max(0, n.s - prevEnd);
+        const label = first ? `${Math.round(gap / 10) * 10} m depuis le départ` : gap < 15 ? 'enchaîne' : Math.round(gap / 10) * 10 + ' m';
+        html += addRow(label, prevEnd + gap / 2);
+        first = false;
       }
-      const sub = n.kind === 'turn' && n.radius ? `rayon ≈ ${n.radius} m · angle ${Math.abs(n.angle)}°${n.edited ? ' · modifiée' : ''}`
-        : n.auto ? (n.edited ? 'modifiée' : n.pct ? `jusqu'à ${n.pct} %` : 'détectée sur le relief IGN') : 'note personnelle';
-      html += `<li data-id="${n.id}" class="${n.off ? 'off' : ''}"><span class="km">${(n.s / 1000).toFixed(2).replace('.', ',')}</span>` +
+      const km = (n.s / 1000).toFixed(2).replace('.', ',') + ' km';
+      const sub = n.kind === 'turn' && n.radius && n.auto ? `rayon ≈ ${n.radius} m · angle ${Math.abs(n.angle)}°${n.edited ? ' · modifiée' : ''}`
+        : n.auto ? (n.edited ? 'modifiée' : n.pct ? `jusqu'à ${n.pct} %` : 'relief IGN') : 'note personnelle';
+      html += `<li data-id="${n.id}" class="${n.off ? 'off' : ''}">` +
+        `<span class="num">${n.off ? '–' : nums.get(n.id)}</span>` +
         `<span class="badge" style="background:${noteColor(n)}">${esc(noteBadge(n))}</span>` +
-        `<span class="txt">${esc(n.text)}<small>${n.off ? 'désactivée' : sub}</small></span></li>`;
+        `<span class="txt">${esc(n.text)}<small>${km} · ${n.off ? 'désactivée' : sub}</small></span>` +
+        (n.off ? '' : '<button class="grip" aria-label="Faire glisser pour déplacer la note">☰</button>') + '</li>';
       if (!n.off) prevEnd = n.s + (n.len || 0);
     }
+    if (!first) html += addRow(`${Math.round(Math.max(0, total - prevEnd) / 10) * 10} m jusqu'à l'arrivée`, (prevEnd + total) / 2);
     ul.innerHTML = html;
   }
   const p = S.prep;
@@ -545,6 +567,7 @@ function initNoteUI() {
   };
   const shift = d => {
     const n = editing.n, p = S.prep; if (!p) return;
+    keepOrigin(n);
     n.s = Math.max(0, Math.min(p.total, n.s + d));
     const i = Math.round(n.s / p.step); n.lat = p.lat[i]; n.lon = p.lon[i];
     syncNoteDlg(false);
@@ -569,10 +592,73 @@ function initNoteUI() {
     $('dlgNote').close(); renderRoute(); saveRoute();
   };
   $('noteList').onclick = e => {
+    const add = e.target.closest('[data-add]');
+    if (add) { addNoteAt(+add.dataset.add); return; }
+    if (e.target.closest('.grip')) return;
     const li = e.target.closest('li[data-id]'); if (!li) return;
     const n = S.route.notes.find(x => x.id === li.dataset.id);
     if (n) openNote(n);
   };
+  initNoteDrag();
+}
+
+// Déplacer une note en faisant glisser sa poignée avant ou après une autre.
+function initNoteDrag() {
+  const ul = $('noteList'), body = ul.closest('.panel-body');
+  let d = null;
+  const clear = () => ul.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+  ul.addEventListener('pointerdown', e => {
+    const g = e.target.closest('.grip'); if (!g || d) return;
+    const li = g.closest('li[data-id]');
+    e.preventDefault();
+    try { g.setPointerCapture(e.pointerId); } catch {}
+    const others = [...ul.querySelectorAll('li[data-id]:not(.off)')].filter(x => x !== li);
+    const all = [...ul.querySelectorAll('li[data-id]:not(.off)')];
+    d = { li, g, id: li.dataset.id, y0: e.clientY, sc0: body.scrollTop, from: all.indexOf(li), to: null, others,
+      mids: others.map(x => { const r = x.getBoundingClientRect(); return r.top + r.height / 2; }) };
+    li.classList.add('dragging'); ul.classList.add('sorting');
+  });
+  ul.addEventListener('pointermove', e => {
+    if (!d) return;
+    const br = body.getBoundingClientRect();
+    if (e.clientY < br.top + 50) body.scrollTop -= 14; else if (e.clientY > br.bottom - 50) body.scrollTop += 14;
+    const shift = body.scrollTop - d.sc0, y = e.clientY + shift;
+    d.li.style.transform = `translateY(${e.clientY - d.y0 + shift}px)`;
+    let k = 0; while (k < d.mids.length && d.mids[k] < y) k++;
+    d.to = k; clear();
+    if (k !== d.from) {
+      if (k < d.others.length) d.others[k].classList.add('drop-before'); else if (d.others.length) d.others[k - 1].classList.add('drop-after');
+    }
+  });
+  const end = e => {
+    if (!d) return;
+    const { id, from, to } = d;
+    try { d.g.releasePointerCapture(e.pointerId); } catch {}
+    d.li.style.transform = ''; d.li.classList.remove('dragging'); ul.classList.remove('sorting'); clear();
+    d = null;
+    if (e.type === 'pointerup' && to != null && to !== from) moveNote(id, to);
+  };
+  ul.addEventListener('pointerup', end);
+  ul.addEventListener('pointercancel', end);
+}
+// Avant de déplacer une note automatique, on retient où elle a été détectée.
+function keepOrigin(n) { if (n.auto && n.lat0 == null) { n.lat0 = n.lat; n.lon0 = n.lon; } }
+// Place la note entre ses nouvelles voisines : à mi-distance, puis ajustable dans sa fenêtre.
+function moveNote(id, to) {
+  const r = S.route, p = S.prep; if (!p) return;
+  const n = r.notes.find(x => x.id === id); if (!n) return;
+  const others = r.notes.filter(x => !x.off && x.id !== id);
+  const prev = others[to - 1], next = others[to];
+  const a = prev ? prev.s + (prev.len || 0) : 0, b = next ? next.s : p.total;
+  let s = b > a ? (a + b) / 2 : a + 1;
+  if (prev) s = Math.max(s, prev.s + 1);
+  if (next) s = Math.min(s, next.s - 1);
+  const i = Math.max(0, Math.min(p.n - 1, Math.round(s / p.step)));
+  keepOrigin(n);
+  n.s = i * p.step; n.lat = p.lat[i]; n.lon = p.lon[i]; n.edited = true;
+  r.notes.sort((x, y) => x.s - y.s);
+  renderRoute(); saveRoute();
+  toast(`Note déplacée à ${fmtDist(n.s)} du départ. Touchez-la pour ajuster sa position.`, 3500);
 }
 function addNoteAt(s, text) {
   const p = S.prep; if (!p) return null;
@@ -683,9 +769,16 @@ function syncSettingsUI() {
   const c = S.cfg;
   setSeg($('setTheme'), c.theme);
   $('setRate').value = c.rate; $('rateVal').textContent = '×' + (+c.rate).toFixed(2).replace('.', ',');
+  setSeg($('setLeadMode'), c.leadMode);
+  $('leadSBox').hidden = c.leadMode === 'm'; $('leadMBox').hidden = c.leadMode !== 'm';
   $('setLead').value = c.lead; $('leadVal').textContent = String(c.lead).replace('.', ',') + ' s';
+  $('setLeadM').value = c.leadM; $('leadMVal').textContent = c.leadM + ' m';
   $('setDist').checked = c.sayDist; $('setRelief').checked = c.sayRelief;
-  $('setScale').value = c.scale; $('scaleVal').textContent = c.scale < 0.95 ? 'large' : c.scale > 1.05 ? 'prudente' : 'normale';
+  setSeg($('setSev'), c.sev);
+  const ex = shiftGrade(3, c.sev);
+  $('sevInfo').textContent = c.sev === 0 ? 'Réglage de base : les virages gardent leur cotation calculée.'
+    : `Chaque virage est coté ${Math.abs(c.sev)} cran${Math.abs(c.sev) > 1 ? 's' : ''} plus ${c.sev > 0 ? 'ouvert' : 'serré'} : un « droite 3 » devient « droite ${ex} ».`;
+  $('setNum').checked = c.showNum; $('setChrono').checked = c.showChrono; $('setAvg').checked = c.showAvg;
   $('setSim').value = c.simSpeed; $('simVal').textContent = c.simSpeed + ' km/h';
   $('setOffline').checked = c.offline;
   const p = S.lastPos || { lat: 46.67, lon: -1.43 };
@@ -709,8 +802,16 @@ function initSettingsUI() {
   $('setLead').oninput = e => { S.cfg.lead = +e.target.value; save(); };
   $('setDist').onchange = e => { S.cfg.sayDist = e.target.checked; save(); };
   $('setRelief').onchange = e => { S.cfg.sayRelief = e.target.checked; save(); };
-  $('setScale').oninput = e => { S.cfg.scale = +e.target.value; save(); };
-  $('setScale').onchange = () => { if (S.prep) { refreshRoute(); toast('Virages recotés'); } };
+  $('setLeadMode').onclick = e => { if (e.target.dataset.v) { S.cfg.leadMode = e.target.dataset.v; save(); } };
+  $('setLeadM').oninput = e => { S.cfg.leadM = +e.target.value; save(); };
+  $('setSev').onclick = e => {
+    const v = e.target.dataset.v; if (v == null || +v === S.cfg.sev) return;
+    S.cfg.sev = +v; save();
+    if (S.prep) { refreshRoute(); toast('Virages recotés sur tout le parcours'); }
+  };
+  $('setNum').onchange = e => { S.cfg.showNum = e.target.checked; save(); renderRoute(); };
+  $('setChrono').onchange = e => { S.cfg.showChrono = e.target.checked; save(); };
+  $('setAvg').onchange = e => { S.cfg.showAvg = e.target.checked; save(); };
   $('setSim').oninput = e => { S.cfg.simSpeed = +e.target.value; save(); };
   $('setOffline').onchange = e => { S.cfg.offline = e.target.checked; save(); setBaseLayer(S.cfg.layer); };
   $('btnVoiceTest').onclick = () => Speech.say('Cent, gauche quatre long, se referme, et droite deux', { urgent: true });
@@ -743,11 +844,12 @@ async function keepAwake(on) {
 document.addEventListener('visibilitychange', () => { if (!document.hidden && (drive || reco) && !wake) keepAwake(true); });
 
 // ---------------------------------------------------------------- mode conduite
-let drive = null, driveMap = null, driveBase = null, driveLine = null, driveCar = null, driveView = 'ahead', lastState = null, lastNoteId = null;
+let drive = null, driveMap = null, driveBase = null, driveLine = null, driveNotes = null;
+let driveView = 'ahead', lastState = null, lastNoteId = null, hdSm = null, driveMapStale = true;
 
 function setDriveBase() {
   if (driveBase) driveMap.removeLayer(driveBase);
-  driveBase = makeTileLayer(S.cfg.layer).addTo(driveMap);
+  driveBase = makeTileLayer(S.cfg.layer, 20).addTo(driveMap);
 }
 async function startDrive(simulate) {
   if (!S.prep) return;
@@ -756,14 +858,15 @@ async function startDrive(simulate) {
   Speech.say('Copilote prêt'); // dit pendant l'appui : iOS n'autorise la voix qu'à partir d'un geste
   $('drive').hidden = false; $('dSim').hidden = !simulate;
   $('dMute').classList.remove('on'); $('dMute').innerHTML = '<svg><use href="#i-sound"/></svg>';
-  $('dBanner').hidden = true; lastNoteId = null; driveView = 'ahead';
-  $('dMap').hidden = true; $('dAhead').hidden = false; $('dView').classList.remove('on');
+  $('dBanner').hidden = true; lastNoteId = null; hdSm = null; driveMapStale = true;
+  $('simSpd').textContent = S.cfg.simSpeed + ' km/h'; $('simPause').textContent = 'Pause';
   drive = new Drive({
     prep: S.prep, notes: S.route.notes, settings: S.cfg,
     say: (t, o) => Speech.say(t, o),
     onState: st => { lastState = st; },
     onFinish: () => toast('Arrivée', 4000),
   });
+  setDriveView(S.cfg.driveView === 'map' ? 'map' : 'ahead');
   drive.start({ simulate });
   const ok = await keepAwake(true);
   if (!ok && !simulate) toast('Pensez à régler le verrouillage automatique de l\'iPhone sur « Jamais » pour garder l\'écran allumé', 6000);
@@ -785,14 +888,17 @@ function driveFrame(now) {
     tFast = now;
     const slow = now - tSlow >= 400;
     if (slow) tSlow = now;
-    renderDrive(st, slow);
+    renderDriveFast(st);
+    if (slow) renderDriveSlow(st);
   }
   requestAnimationFrame(driveFrame);
 }
-function renderDrive(st, slow) {
-  renderDriveFast(st);
-  if (slow) renderDriveSlow(st);
-}
+const fmtTime = t => {
+  if (t == null) return '0:00';
+  const s = Math.floor(t), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = String(s % 60).padStart(2, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+};
+function setText(el, t) { if (el.textContent !== t) el.textContent = t; }
 function renderDriveSlow(st) {
   const kmh = Math.round(st.v * 3.6);
   $('dSpeed').textContent = st.started ? kmh : '–';
@@ -803,10 +909,12 @@ function renderDriveSlow(st) {
   else if (st.acc == null) { g.textContent = 'Recherche du GPS…'; g.className = ''; }
   else if (st.stale) { g.textContent = 'Signal GPS perdu'; g.className = 'bad'; }
   else { g.textContent = `GPS ±${Math.round(st.acc)} m`; g.className = st.acc > 25 ? 'bad' : ''; }
+  $('dAvg').hidden = !S.cfg.showAvg;
+  if (S.cfg.showAvg) $('dAvg').textContent = 'moy. ' + (st.avg != null ? Math.round(st.avg * 3.6) + ' km/h' : '–');
 
   const ban = $('dBanner');
   let msg = '';
-  if (st.finished) msg = 'Arrivée';
+  if (st.finished) msg = 'Arrivée' + (st.elapsed != null ? ` · ${fmtTime(st.elapsed)}` + (st.avg != null ? ` · moyenne ${Math.round(st.avg * 3.6)} km/h` : '') : '');
   else if (st.offRoute) msg = `Hors parcours (${fmtDist(st.distToRoute)})`;
   else if (!st.started && st.distToRoute != null && st.distToRoute > 50) msg = `Rejoignez le parcours : il est à ${fmtDist(st.distToRoute)}`;
   ban.hidden = !msg; ban.textContent = msg;
@@ -820,46 +928,79 @@ function renderDriveSlow(st) {
   drawProfile($('dProfile'), S.prep, drive.notes, Math.max(0, st.s - 100), Math.min(S.prep.total, Math.max(st.s, 0) + 1000), st.s);
 }
 function renderDriveFast(st) {
+  const ch = $('dChrono');
+  ch.hidden = !S.cfg.showChrono;
+  if (S.cfg.showChrono) setText(ch, '⏱ ' + fmtTime(st.elapsed));
   const n = st.next;
   if (n) {
     const d = n.s - st.s;
-    $('dDist').textContent = d > 12 ? fmtDist(Math.round(d / 10) * 10) : 'maintenant';
-    $('dText').textContent = n.text; $('dText').classList.toggle('long', n.text.length > 14);
-    $('dNext2').textContent = st.next2 ? `puis ${st.next2.text} · ${fmtDist(Math.round((st.next2.s - st.s) / 10) * 10)}` : '';
+    setText($('dDist'), (d > 12 ? fmtDist(Math.round(d / 10) * 10) : 'maintenant') + (S.cfg.showNum ? ` · note ${st.nextNum}` : ''));
+    setText($('dText'), n.text); $('dText').classList.toggle('long', n.text.length > 14);
+    setText($('dNext2'), st.next2 ? `puis ${st.next2.text} · ${fmtDist(Math.round((st.next2.s - st.s) / 10) * 10)}` : '');
     if (lastNoteId !== n.id) { lastNoteId = n.id; drawArrow($('dArrow'), n); }
   } else {
-    $('dDist').textContent = fmtDist(st.remaining); $('dText').textContent = 'Tout droit'; $('dNext2').textContent = '';
+    setText($('dDist'), fmtDist(st.remaining)); setText($('dText'), 'Tout droit'); setText($('dNext2'), '');
     $('dText').classList.remove('long');
     if (lastNoteId !== 'none') { lastNoteId = 'none'; drawArrow($('dArrow'), null); }
   }
   if (driveView === 'ahead') {
     const target = Math.max(160, Math.min(420, st.v * 11));
     lookSm += (target - lookSm) * 0.06; // l'échelle suit la vitesse en douceur
-    drawAhead($('dAhead'), S.prep, drive.notes, st.s, lookSm);
-  } else if (driveMap && st.started) {
-    driveCar.setLatLng([st.lat, st.lon]);
-    const el = driveCar.getElement(); if (el) el.firstChild.style.transform = `rotate(${st.heading}deg)`;
-    if (!driveMap._rgT || performance.now() - driveMap._rgT > 900) {
-      driveMap._rgT = performance.now();
-      driveMap.setView([st.lat, st.lon], driveMap.getZoom(), { animate: true, duration: 0.8, easeLinearity: 1 });
-    }
+    drawAhead($('dAhead'), S.prep, drive.notes, st.s, lookSm, S.cfg.showNum);
+  } else if (driveMap) {
+    // Carte tournante : la voiture reste fixe, pointée vers le haut, la carte tourne autour d'elle.
+    if (hdSm == null) hdSm = st.heading;
+    let dh = st.heading - hdSm; while (dh > 180) dh -= 360; while (dh < -180) dh += 360;
+    hdSm = (hdSm + dh * 0.18 + 360) % 360;
+    driveMap.setView([st.lat, st.lon], S.cfg.driveZoom, { animate: false });
+    const rot = $('dMapRot');
+    rot.style.transform = `rotate(${(-hdSm).toFixed(2)}deg)`;
+    rot.style.setProperty('--unrot', hdSm.toFixed(1) + 'deg');
   }
 }
-function toggleDriveView() {
-  driveView = driveView === 'ahead' ? 'map' : 'ahead';
-  $('dView').classList.toggle('on', driveView === 'map');
-  $('dMap').hidden = driveView !== 'map'; $('dAhead').hidden = driveView === 'map';
-  if (driveView === 'map') {
-    if (!driveMap) {
-      driveMap = L.map('dMap', { zoomControl: false, attributionControl: false, maxZoom: 19, minZoom: 8 }).setView([S.prep.lat[0], S.prep.lon[0]], 17);
-      driveMap.createPane('routePane').style.zIndex = 420;
-      setDriveBase(); applyTileTheme();
-      driveCar = L.marker([S.prep.lat[0], S.prep.lon[0]], { icon: L.divIcon({ className: '', html: '<div class="car"></div>', iconSize: [22, 26], iconAnchor: [11, 15] }), interactive: false }).addTo(driveMap);
-    }
-    if (driveLine) driveMap.removeLayer(driveLine);
-    driveLine = L.polyline(S.track.map(p => [p[0], p[1]]), { color: getComputedStyle(document.documentElement).getPropertyValue('--route').trim(), weight: 6, opacity: .9, pane: 'routePane', interactive: false }).addTo(driveMap);
-    setTimeout(() => { driveMap.invalidateSize(); if (lastState) driveMap.setView([lastState.lat, lastState.lon], 17, { animate: false }); }, 30);
+// Le fond de carte est un grand carré centré sur la voiture, pour que la rotation ne laisse jamais de coin vide.
+// Il déborde de 180 px tout autour : les dalles de carte se chargent ainsi avant d'entrer dans l'écran.
+function layoutDriveMap() {
+  const box = $('dMapBox'), w = box.clientWidth, h = box.clientHeight;
+  if (!w || !h) return;
+  const cx = w / 2, cy = h * 0.68;
+  const D = Math.ceil(2 * Math.hypot(Math.max(cx, w - cx), Math.max(cy, h - cy))) + 360;
+  const rot = $('dMapRot');
+  rot.style.width = rot.style.height = D + 'px';
+  rot.style.left = (cx - D / 2) + 'px'; rot.style.top = (cy - D / 2) + 'px';
+  $('dCar').style.left = cx + 'px'; $('dCar').style.top = cy + 'px';
+  if (driveMap) driveMap.invalidateSize({ animate: false });
+}
+function setDriveView(v) {
+  driveView = v;
+  $('dView').classList.toggle('on', v === 'map');
+  $('dMapBox').hidden = v !== 'map'; $('dAhead').hidden = v === 'map';
+  if (v !== 'map') return;
+  layoutDriveMap();
+  const p0 = lastState && lastState.started ? [lastState.lat, lastState.lon] : [S.prep.lat[0], S.prep.lon[0]];
+  if (!driveMap) {
+    driveMap = L.map('dMap', { zoomControl: false, attributionControl: false, maxZoom: 20, minZoom: 12, zoomSnap: 0.5,
+      dragging: false, touchZoom: false, doubleClickZoom: false, scrollWheelZoom: false, boxZoom: false, keyboard: false,
+      zoomAnimation: false, fadeAnimation: false, inertia: false }).setView(p0, S.cfg.driveZoom);
+    driveMap.createPane('routePane').style.zIndex = 420;
+    setDriveBase(); applyTileTheme();
+    driveNotes = L.layerGroup().addTo(driveMap);
   }
+  if (driveMapStale) {
+    driveMapStale = false;
+    if (driveLine) driveMap.removeLayer(driveLine);
+    driveLine = L.polyline(S.track.map(p => [p[0], p[1]]), { color: getComputedStyle(document.documentElement).getPropertyValue('--route').trim(), weight: 7, opacity: .9, pane: 'routePane', interactive: false }).addTo(driveMap);
+    driveNotes.clearLayers();
+    const nums = noteNumbers();
+    for (const n of S.route.notes) if (!n.off) noteMarker(n, nums.get(n.id)).addTo(driveNotes);
+  }
+  driveMap.invalidateSize({ animate: false });
+  driveMap.setView(p0, S.cfg.driveZoom, { animate: false });
+}
+function driveZoom(dz) {
+  S.cfg.driveZoom = Math.max(13, Math.min(20, S.cfg.driveZoom + dz));
+  saveSettings(S.cfg);
+  if (driveMap && lastState) driveMap.setView([lastState.lat, lastState.lon], S.cfg.driveZoom, { animate: false });
 }
 function initDriveUI() {
   $('dQuit').onclick = stopDrive;
@@ -868,15 +1009,28 @@ function initDriveUI() {
     $('dMute').classList.toggle('on', m);
     $('dMute').innerHTML = `<svg><use href="#i-${m ? 'mute' : 'sound'}"/></svg>`;
   };
-  $('dView').onclick = toggleDriveView;
+  $('dView').onclick = () => {
+    setDriveView(driveView === 'ahead' ? 'map' : 'ahead');
+    S.cfg.driveView = driveView; saveSettings(S.cfg);
+  };
+  $('dZoomIn').onclick = () => driveZoom(0.5);
+  $('dZoomOut').onclick = () => driveZoom(-0.5);
+  $('dChrono').onclick = () => { if (drive) { drive.resetChrono(); toast('Chrono remis à zéro'); } };
   $('dMark').onclick = () => {
     if (!drive || !lastState || !lastState.started) return;
     const n = addNoteAt(lastState.s, 'attention');
-    if (n) { drive.notes.push(n); drive.notes.sort((a, b) => a.s - b.s); drive.spoken.add(n.id); toast('Note « attention » posée ici. Vous pourrez la modifier dans Notes.'); }
+    if (n) { drive.notes.push(n); drive.notes.sort((a, b) => a.s - b.s); drive.spoken.add(n.id); driveMapStale = true; toast('Note « attention » posée ici. Vous pourrez la modifier dans Notes.'); }
   };
   $('simPause').onclick = () => { if (drive) { drive.paused = !drive.paused; $('simPause').textContent = drive.paused ? 'Reprendre' : 'Pause'; } };
   $('simFwd').onclick = () => drive && drive.simSkip(500);
   $('simBack').onclick = () => drive && drive.simSkip(-300);
+  const simSpeed = d => { // prise en compte immédiate, même en cours de simulation
+    S.cfg.simSpeed = Math.max(30, Math.min(140, S.cfg.simSpeed + d)); saveSettings(S.cfg);
+    $('simSpd').textContent = S.cfg.simSpeed + ' km/h';
+  };
+  $('simSlow').onclick = () => simSpeed(-10);
+  $('simFast').onclick = () => simSpeed(10);
+  window.addEventListener('resize', () => { if (drive && driveView === 'map') setTimeout(layoutDriveMap, 60); });
 }
 
 // ---------------------------------------------------------------- mode reconnaissance

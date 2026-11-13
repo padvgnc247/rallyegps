@@ -5,7 +5,7 @@ export const STEP = 3;        // pas de rééchantillonnage (m)
 export const ELE_STEP = 10;   // pas des altitudes (m)
 
 // Seuils de rayon "efficace" (m) pour les cotations 1 à 6.
-const GRADE_R = [14, 22, 35, 55, 90, 160];
+const GRADE_R = [14, 22, 35, 55, 90, 160, 260, 420]; // 7 et 8 : virages très ouverts, annoncés seulement en réglage prudent
 const ROAD_W = 2.5;           // largeur exploitable pour couper un virage (m)
 
 // Prépare un tracé [[lat, lon, ele?], ...] : positions à pas constant, cap, courbure.
@@ -114,13 +114,20 @@ export function trackEleGrid(prep) {
   return out;
 }
 
-export function gradeFromRadius(reff, scale = 1) {
-  for (let g = 0; g < GRADE_R.length; g++) if (reff < GRADE_R[g] * scale) return g + 1;
+export function gradeFromRadius(reff) {
+  for (let g = 0; g < GRADE_R.length; g++) if (reff < GRADE_R[g]) return g + 1;
   return 0; // trop ouvert pour être annoncé
 }
 
+// Applique la sévérité au chiffre du virage : large = +1, prudent = -1, etc. Renvoie 0 si le virage n'est plus annoncé.
+export function shiftGrade(base, sev) {
+  if (!base) return 0;
+  if (base <= 6) return Math.max(1, Math.min(6, base + sev));
+  return base + sev <= 6 ? base + sev : 0;
+}
+
 // Détecte les virages. Renvoie [{i0, i1, apex, s, len, angle(deg, >0 gauche), radius, reff, grade, ...}]
-export function detectCurves(prep, { scale = 1 } = {}) {
+export function detectCurves(prep, { sev = 0 } = {}) {
   const { n, curv, step } = prep;
   const TH = 1 / 250;
   const runs = [];
@@ -166,15 +173,16 @@ export function detectCurves(prep, { scale = 1 } = {}) {
     const m = cumA.length - 1;
     const radius = tight(0, m);
     const reff = radius + ROAD_W / Math.max(1e-3, 1 - Math.cos(Math.min(abs, Math.PI) / 2));
-    const grade = gradeFromRadius(reff, scale);
+    const base = gradeFromRadius(reff);
+    const grade = shiftGrade(base, sev);
     if (!grade) continue;
     const c = {
-      i0, i1, apex, s: i0 * step, len: (i1 - i0) * step, angle: angle / RAD, radius, reff, grade,
+      i0, i1, apex, s: i0 * step, len: (i1 - i0) * step, angle: angle / RAD, radius, reff, grade, base,
       dir: angle > 0 ? 'G' : 'D', hairpin: false, square: false, mods: [],
     };
     const deg = abs / RAD;
-    if (deg >= 140 && radius < 22 * scale) c.hairpin = true;
-    else if (deg >= 70 && deg <= 115 && radius < 13 * scale) c.square = true;
+    if (deg >= 140 && radius < 22) c.hairpin = true;
+    else if (deg >= 70 && deg <= 115 && radius < 13) c.square = true;
     if (!c.hairpin && c.len >= 60 && deg >= 80) c.mods.push('long');
     if (deg >= 60 && !c.square) {
       let half = 1;
@@ -261,18 +269,25 @@ function nearestIndex(prep, lat, lon) {
 export { nearestIndex };
 
 // Génère les notes automatiques et les fusionne avec celles que l'utilisateur a créées ou modifiées.
-export function buildNotes(prep, oldNotes = [], { scale = 1, vertical = true } = {}) {
-  const kept = [];
+export function buildNotes(prep, oldNotes = [], { sev = 0, vertical = true } = {}) {
+  const kept = [], origins = [];
   for (const o of oldNotes) {
     if (o.auto && !o.edited) continue;
     const near = nearestIndex(prep, o.lat, o.lon);
     if (near.d > 40) continue;
     kept.push({ ...o, s: near.i * prep.step });
+    // Une note automatique déplacée à la main garde la trace de son emplacement d'origine,
+    // pour que le recalcul ne recrée pas la même note à cet endroit.
+    if (o.auto && o.lat0 != null) {
+      const org = nearestIndex(prep, o.lat0, o.lon0);
+      if (org.d <= 40) origins.push({ turn: o.kind === 'turn', s: org.i * prep.step });
+    }
   }
   const notes = [...kept];
-  const clash = (s, turn) => kept.some(k => (k.kind === 'turn') === turn && Math.abs(k.s - s) < 22);
+  const clash = (s, turn) => kept.some(k => (k.kind === 'turn') === turn && Math.abs(k.s - s) < 22)
+    || origins.some(k => k.turn === turn && Math.abs(k.s - s) < 22);
 
-  for (const c of detectCurves(prep, { scale })) {
+  for (const c of detectCurves(prep, { sev })) {
     if (clash(c.s, true)) continue;
     const nt = {
       id: newId(), kind: 'turn', auto: true, s: c.s, len: c.len, dir: c.dir, grade: c.grade,

@@ -74,7 +74,7 @@
     <div class="panel-body">
       <canvas id="fullProfile" class="profile-card"></canvas>
       <div id="eleInfo" class="muted small"></div>
-      <p class="muted small" id="notesHelp">Touchez une note pour la modifier. Pour en ajouter une, touchez le tracé sur la carte puis « Ajouter une note ici ».</p>
+      <p class="muted small" id="notesHelp">Touchez une note pour la modifier. Le bouton ＋ entre deux notes en ajoute une à cet endroit. Pour déplacer une note, faites glisser sa poignée ☰ avant ou après une autre.</p>
       <ul id="noteList" class="list"></ul>
     </div>
   </section>
@@ -110,24 +110,33 @@
         <h3>Affichage</h3>
         <div class="seg" id="setTheme"><button data-v="auto">Auto (soleil)</button><button data-v="day">Jour</button><button data-v="night">Nuit</button></div>
         <div id="sunInfo" class="muted small"></div>
+        <label class="check"><input id="setNum" type="checkbox"><span>Afficher le numéro des notes sur la carte</span></label>
+        <label class="check"><input id="setChrono" type="checkbox"><span>Chrono en conduite (touchez-le pour le remettre à zéro)</span></label>
+        <label class="check"><input id="setAvg" type="checkbox"><span>Vitesse moyenne en conduite</span></label>
       </div>
       <div class="card">
         <h3>Voix du copilote</h3>
         <label class="field"><span>Voix</span><select id="setVoice"></select></label>
         <label class="field"><span>Débit <b id="rateVal"></b></span><input id="setRate" type="range" min="0.7" max="1.6" step="0.05"></label>
-        <label class="field"><span>Annoncer <b id="leadVal"></b> avant le virage</span><input id="setLead" type="range" min="3" max="10" step="0.5"></label>
-        <label class="check"><input id="setDist" type="checkbox"><span>Dire la distance avant la note (« 100, gauche 4 »)</span></label>
+        <div class="field"><span>Moment de l'annonce avant le virage</span>
+          <div class="seg" id="setLeadMode"><button data-v="s">En secondes</button><button data-v="m">En mètres</button></div>
+        </div>
+        <label class="field" id="leadSBox"><span>Annoncer <b id="leadVal"></b> avant le virage</span><input id="setLead" type="range" min="1" max="10" step="0.5"></label>
+        <label class="field" id="leadMBox"><span>Annoncer <b id="leadMVal"></b> avant le virage</span><input id="setLeadM" type="range" min="20" max="300" step="10"></label>
+        <label class="check"><input id="setDist" type="checkbox"><span>Dire aussi la distance avant la note (« 100, gauche 4 »)</span></label>
         <label class="check"><input id="setRelief" type="checkbox"><span>Annoncer crêtes, cuvettes et fortes pentes</span></label>
         <button id="btnVoiceTest" class="btn">Tester la voix</button>
       </div>
       <div class="card">
         <h3>Cotation des virages</h3>
-        <label class="field"><span>Sévérité <b id="scaleVal"></b></span><input id="setScale" type="range" min="0.7" max="1.4" step="0.05"></label>
-        <p class="muted small">1 = très serré, 6 = rapide. Vers la droite, les virages sont cotés plus serrés (plus prudent). Les notes que vous avez modifiées ne changent pas.</p>
+        <div class="seg five" id="setSev"><button data-v="2">Très large</button><button data-v="1">Large</button><button data-v="0">Normal</button><button data-v="-1">Prudent</button><button data-v="-2">Très prudent</button></div>
+        <p class="muted small" id="sevInfo"></p>
+        <p class="muted small">1 = très serré, 6 = rapide. Les virages sont recotés tout de suite. Les notes que vous avez modifiées à la main ne changent pas.</p>
       </div>
       <div class="card">
         <h3>Simulation</h3>
         <label class="field"><span>Vitesse maxi simulée <b id="simVal"></b></span><input id="setSim" type="range" min="30" max="140" step="5"></label>
+        <p class="muted small">Elle se règle aussi pendant la simulation, avec les boutons − et + en bas de l'écran.</p>
       </div>
       <div class="card">
         <h3>Cartes hors ligne</h3>
@@ -140,6 +149,7 @@
         <p class="small">Dans Safari : bouton Partager, puis « Sur l'écran d'accueil ». Lancez ensuite l'app depuis son icône. Pendant la conduite, l'app doit rester à l'écran, téléphone déverrouillé.</p>
         <p class="muted small">Données : © IGN (Plan IGN, photos aériennes, RGE ALTI), © contributeurs OpenStreetMap, itinéraires BRouter. À utiliser en reconnaissance, sur épreuve fermée ou terrain autorisé. Sur route ouverte, le code de la route s'applique.</p>
         <p class="muted small" id="ver"></p>
+        <p class="small"><a href="v1/">Ouvrir l'ancienne version (1.0.1)</a>, conservée telle quelle. Un lien dans ses réglages ramène ici.</p>
       </div>
     </div>
   </section>
@@ -167,7 +177,7 @@
   <div id="drive" hidden>
     <div class="d-top">
       <div class="d-speed"><b id="dSpeed">0</b><small>km/h</small></div>
-      <div class="d-info"><span id="dRemain">–</span><span id="dGps">GPS…</span></div>
+      <div class="d-info"><span id="dRemain">–</span><button id="dChrono" class="d-chrono" hidden></button><span id="dAvg" hidden></span><span id="dGps">GPS…</span></div>
       <button id="dMute" class="dbtn" aria-label="Couper la voix"><svg><use href="#i-sound"/></svg></button>
       <button id="dView" class="dbtn" aria-label="Carte ou virages"><svg><use href="#i-map"/></svg></button>
       <button id="dMark" class="dbtn" aria-label="Marquer une note ici"><svg><use href="#i-plus"/></svg></button>
@@ -183,7 +193,11 @@
     </div>
     <div class="d-main">
       <canvas id="dAhead"></canvas>
-      <div id="dMap" hidden></div>
+      <div id="dMapBox" hidden>
+        <div id="dMapRot"><div id="dMap"></div></div>
+        <div id="dCar" class="car"></div>
+        <div class="zoomer"><button id="dZoomIn" class="dbtn" aria-label="Zoomer">+</button><button id="dZoomOut" class="dbtn" aria-label="Dézoomer">−</button></div>
+      </div>
       <div id="dBanner" hidden></div>
     </div>
     <div class="d-prof">
@@ -191,7 +205,9 @@
       <canvas id="dProfile"></canvas>
     </div>
     <div class="d-sim" id="dSim" hidden>
-      <span>Simulation</span>
+      <button id="simSlow" class="btn small" aria-label="Moins vite">−</button>
+      <span id="simSpd">80 km/h</span>
+      <button id="simFast" class="btn small" aria-label="Plus vite">+</button>
       <button id="simPause" class="btn small">Pause</button>
       <button id="simBack" class="btn small">−300 m</button>
       <button id="simFwd" class="btn small">+500 m</button>

@@ -10,6 +10,10 @@ GPS copilote de rallye, sous forme d'application web installable sur iPhone (PWA
 - Cartes Plan IGN, photo aérienne IGN et OpenStreetMap, téléchargeables le long du parcours pour un usage hors réseau.
 - Mode jour et mode nuit, bascule automatique au lever et au coucher du soleil.
 
+## Versions
+
+La version courante est à la racine du site. La version 1.0.1 reste disponible telle quelle dans le dossier `v1/` (adresse du site suivie de `v1/`).
+
 ## Installation sur iPhone
 
 Ouvrir l'adresse du site dans Safari, toucher Partager, puis « Sur l'écran d'accueil ».

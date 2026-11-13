@@ -11,6 +11,7 @@ export class Drive {
     this.acc = null; this.off = 0; this.offRoute = false; this.started = false; this.finished = false;
     this.spoken = new Set(); this.lastFixT = 0; this.distToRoute = null;
     this.sim = null; this.paused = false;
+    this.chrono = null; // { t0, s0, tEnd, sEnd }
   }
 
   start({ simulate = false, fromS = 0 } = {}) {
@@ -94,6 +95,7 @@ export class Drive {
     const jumped = this.forceJump || (this.idx != null && Math.abs(m.s - this.sBase) > Math.max(120, this.v * 8));
     this.forceJump = false;
     this.v = v; this.idx = m.i; this.sBase = m.s; this.tBase = fix.t;
+    if (!this.chrono && v > 1.5 && !this.finished) this.chrono = { t0: fix.t, s0: m.s }; // le chrono part au premier mouvement
     if (!this.started) {
       this.started = true; this.sShow = m.s;
       this.markPassed(m.s);
@@ -122,6 +124,7 @@ export class Drive {
       if (!this.offRoute) this.trigger(s);
       if (!this.finished && s >= this.prep.total - 12) {
         this.finished = true; this.say('Arrivée');
+        if (this.chrono && !this.chrono.tEnd) { this.chrono.tEnd = now; this.chrono.sEnd = this.prep.total; }
         if (this.onFinish) this.onFinish();
       }
     }
@@ -130,7 +133,8 @@ export class Drive {
 
   trigger(s) {
     const { notes, cfg } = this;
-    const leadD = Math.max(35, this.v * cfg.lead);
+    // Annonce un certain nombre de mètres avant le virage, ou un certain nombre de secondes (selon la vitesse).
+    const leadD = cfg.leadMode === 'm' ? cfg.leadM : Math.max(10, this.v * cfg.lead);
     for (let k = 0; k < notes.length; k++) {
       const n = notes[k];
       if (this.spoken.has(n.id)) continue;
@@ -182,17 +186,26 @@ export class Drive {
   simSkip(d) {
     if (!this.sim) return;
     this.sim.s = Math.max(0, Math.min(this.prep.total - 20, this.sim.s + d)); this.sim.v = 0; this.sim.emit = 0;
-    this.idx = null; this.finished = false; this.forceJump = true;
+    this.idx = null; this.finished = false; this.forceJump = true; this.chrono = null;
+  }
+
+  resetChrono() {
+    this.chrono = this.started && !this.finished ? { t0: performance.now(), s0: this.sShow } : null;
   }
 
   state(now) {
     const s = this.sShow, prep = this.prep;
-    const up = this.notes.filter(n => n.s >= s - 8);
+    let k0 = 0;
+    while (k0 < this.notes.length && this.notes[k0].s < s - 8) k0++;
+    const up = this.notes.slice(k0, k0 + 2);
+    const ch = this.chrono;
+    const elapsed = ch ? ((ch.tEnd || now) - ch.t0) / 1000 : null;
+    const avg = ch && elapsed > 3 ? Math.max(0, ((ch.sEnd != null ? ch.sEnd : s) - ch.s0) / elapsed) : null;
     const i = Math.min(prep.n - 1, Math.max(0, Math.round(s / prep.step)));
     return {
       started: this.started, s, v: this.v, acc: this.acc, offRoute: this.offRoute, distToRoute: this.distToRoute,
       gpsError: this.gpsError, stale: this.started && !this.sim && now - this.lastFixT > 5000,
-      next: up[0] || null, next2: up[1] || null, remaining: prep.total - s,
+      next: up[0] || null, next2: up[1] || null, nextNum: up[0] ? k0 + 1 : null, remaining: prep.total - s, elapsed, avg,
       slope: prep.slope ? prep.slope[i] : null, ele: prep.ele ? prep.ele[i] : null,
       lat: prep.lat[i], lon: prep.lon[i], heading: prep.heading[i], finished: this.finished, sim: !!this.sim, paused: this.paused,
     };

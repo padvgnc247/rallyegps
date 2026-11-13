@@ -15,7 +15,7 @@ export function fitCanvas(cv) {
 const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
 // Route à venir, cap vers le haut. s = position (m), look = distance affichée devant (m).
-export function drawAhead(cv, prep, notes, s, look) {
+export function drawAhead(cv, prep, notes, s, look, showNum) {
   const { ctx, w, h } = fitCanvas(cv);
   ctx.clearRect(0, 0, w, h);
   if (!prep || w < 10 || h < 10) return;
@@ -82,6 +82,10 @@ export function drawAhead(cv, prep, notes, s, look) {
     ctx.fillStyle = noteColor(nt);
     roundRect(ctx, bx - tw / 2, by - 15, tw, 30, 8); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.fillText(label, bx, by + 1);
+    if (showNum) {
+      ctx.font = '700 11px system-ui, sans-serif'; ctx.fillStyle = dim;
+      ctx.fillText('n° ' + (notes.indexOf(nt) + 1), bx, by - 23);
+    }
   }
   // Voiture.
   ctx.fillStyle = css('--accent'); ctx.strokeStyle = css('--bg'); ctx.lineWidth = 3;

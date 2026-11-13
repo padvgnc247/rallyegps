@@ -1,5 +1,5 @@
 // Service worker : l'app fonctionne hors ligne, les images de carte sont gardées en cache.
-const VERSION = 'rg-1.0.1';
+const VERSION = 'rg-1.1.0';
 const TILES = 'rg-tiles-v1';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
@@ -14,7 +14,7 @@ self.addEventListener('install', e => {
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
-    .then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== TILES).map(k => caches.delete(k))))
+    .then(keys => Promise.all(keys.filter(k => k.startsWith('rg-') && k !== VERSION && k !== TILES).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
 

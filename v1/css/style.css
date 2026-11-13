@@ -198,3 +198,5 @@ dialog h3 { color: var(--ink); text-transform: none; letter-spacing: 0; font-siz
   #sheet { right: auto; width: 380px; }
   .panel-body { padding-bottom: 12px; }
 }
+
+.card a { color: var(--accent); font-weight: 600; }
